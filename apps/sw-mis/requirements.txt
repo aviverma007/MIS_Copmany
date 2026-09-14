@@ -1,9 +1,0 @@
-pandas
-numpy
-openpyxl
-fastapi
-uvicorn
-python-multipart
-reportlab
-matplotlib
-Pillow

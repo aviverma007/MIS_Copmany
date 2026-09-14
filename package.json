@@ -1,0 +1,16 @@
+{
+  "name": "mis-company",
+  "version": "2.0.0",
+  "private": true,
+  "description": "MIS Company - single fullstack complaint MIS for M3M, Smartworld and NBH",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "sample-data": "node scripts/make-sample-data.js",
+    "build-client": "cd client && npm install && npm run build"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "xlsx": "^0.18.5"
+  }
+}

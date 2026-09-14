@@ -1,9 +1,5 @@
-__pycache__/
-*.pyc
-.venv/
-venv/
 node_modules/
-.pytest_cache/
-.DS_Store
+.session_secret
 *.log
-portal/node_modules/
+.DS_Store
+~$*
