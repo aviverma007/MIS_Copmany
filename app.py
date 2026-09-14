@@ -152,8 +152,11 @@ def read_session(token: str | None):
 
 
 def set_session_cookie(resp: Response, username: str, app_id: str | None):
+    # No max_age/expires: a browser-session cookie. Closing the browser
+    # discards it, so reopening the page requires signing in again.
+    # SESSION_TTL still caps how long a token stays valid server-side.
     resp.set_cookie(COOKIE, make_session(username, app_id),
-                    max_age=SESSION_TTL, httponly=True, samesite="lax", path="/")
+                    httponly=True, samesite="lax", path="/")
 
 
 # ---------------------------------------------------------- HTML: login/home
