@@ -106,7 +106,8 @@ APPS = {
     },
 }
 
-SESSION_TTL = 12 * 3600
+SESSION_TTL = 12 * 3600                                   # absolute cap
+INACTIVITY_TTL = int(float(os.environ.get("INACTIVITY_MINUTES", "30")) * 60)
 COOKIE = "mis_session"
 
 # ------------------------------------------------------------------ session
@@ -127,8 +128,10 @@ def _b64d(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def make_session(username: str, app_id: str | None) -> str:
-    payload = _b64e(json.dumps({"u": username, "a": app_id, "t": int(time.time())}).encode())
+def make_session(username: str, app_id: str | None, t0: int | None = None) -> str:
+    now = int(time.time())
+    payload = _b64e(json.dumps(
+        {"u": username, "a": app_id, "t": now, "t0": t0 or now}).encode())
     sig = _b64e(hmac.new(SECRET, payload.encode(), hashlib.sha256).digest())
     return f"{payload}.{sig}"
 
@@ -144,18 +147,26 @@ def read_session(token: str | None):
         data = json.loads(_b64d(payload))
     except Exception:
         return None
-    if int(time.time()) - int(data.get("t", 0)) > SESSION_TTL:
+    now = int(time.time())
+    t = int(data.get("t", 0))
+    t0 = int(data.get("t0", t))
+    if now - t > INACTIVITY_TTL:      # 30 min without any request
+        return None
+    if now - t0 > SESSION_TTL:        # absolute 12 h cap since login
         return None
     if data.get("a") is not None and data["a"] not in APPS:
         return None
     return data
 
 
-def set_session_cookie(resp: Response, username: str, app_id: str | None):
+def set_session_cookie(resp: Response, username: str, app_id: str | None,
+                       t0: int | None = None):
     # No max_age/expires: a browser-session cookie. Closing the browser
     # discards it, so reopening the page requires signing in again.
-    # SESSION_TTL still caps how long a token stays valid server-side.
-    resp.set_cookie(COOKIE, make_session(username, app_id),
+    # Each request re-issues the cookie with a fresh activity timestamp
+    # (sliding 30-minute inactivity window); t0 preserves the login time
+    # for the absolute 12-hour cap.
+    resp.set_cookie(COOKIE, make_session(username, app_id, t0),
                     httponly=True, samesite="lax", path="/")
 
 
@@ -435,7 +446,7 @@ async def go_home(request: Request):
         return resp
     # Serve the home page directly - no redirect hop, instant.
     resp = page(home_html(s["u"]))
-    set_session_cookie(resp, s["u"], None)
+    set_session_cookie(resp, s["u"], None, s.get("t0"))
     return resp
 
 
@@ -446,7 +457,7 @@ async def select_app(app_id: str, request: Request):
         return RedirectResponse("/", status_code=302)
     target = APPS[app_id].get("root_redirect", "/")
     resp = RedirectResponse(target, status_code=302)
-    set_session_cookie(resp, s["u"], app_id)
+    set_session_cookie(resp, s["u"], app_id, s.get("t0"))
     return resp
 
 
@@ -461,7 +472,9 @@ async def route_all(request: Request, path: str):
 
     if session.get("a") is None:
         if request.method in ("GET", "HEAD"):
-            return page(home_html(session["u"]))
+            resp = page(home_html(session["u"]))
+            set_session_cookie(resp, session["u"], None, session.get("t0"))
+            return resp
         return JSONResponse({"error": "No application selected."}, status_code=400)
 
     target = APPS[session["a"]]
@@ -471,7 +484,9 @@ async def route_all(request: Request, path: str):
     ready, err = data_ready(session["a"])
     if not ready and request.method == "GET" and \
             "text/html" in request.headers.get("accept", ""):
-        return page(loading_html(target["title"], err))
+        resp = page(loading_html(target["title"], err))
+        set_session_cookie(resp, session["u"], session["a"], session.get("t0"))
+        return resp
 
     # NBH's "/" route is its upload page - send people to the dashboard.
     if path == "" and "root_redirect" in target:
@@ -502,9 +517,13 @@ async def route_all(request: Request, path: str):
         out_headers["cache-control"] = "no-store"
         out_headers.pop("etag", None)
         out_headers.pop("last-modified", None)
-        return Response(html, status_code=upstream.status_code, headers=out_headers, media_type=ctype)
+        resp = Response(html, status_code=upstream.status_code, headers=out_headers, media_type=ctype)
+        set_session_cookie(resp, session["u"], session["a"], session.get("t0"))
+        return resp
 
-    return Response(upstream.content, status_code=upstream.status_code, headers=out_headers)
+    resp = Response(upstream.content, status_code=upstream.status_code, headers=out_headers)
+    set_session_cookie(resp, session["u"], session["a"], session.get("t0"))
+    return resp
 
 
 # ----------------------------------------------------------- engine startup
