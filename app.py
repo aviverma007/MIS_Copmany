@@ -352,6 +352,7 @@ INJECT = """
     display: flex; align-items: center; gap: 10px; padding: 0 14px;
     background: linear-gradient(135deg, #0F1F3D, #1F3864); color: #fff;
     font: 13px/1 'Segoe UI', Arial, sans-serif; box-shadow: 0 2px 8px rgba(15,31,61,.25);
+    box-sizing: border-box;
   }
   #mis-gate-bar .gb-brand { font-weight: 800; letter-spacing: .2px; }
   #mis-gate-bar .gb-user { opacity: .7; font-size: 12px; }
@@ -361,8 +362,12 @@ INJECT = """
     border: 1px solid rgba(255,255,255,.4); border-radius: 6px; padding: 6px 14px;
   }
   #mis-gate-bar a:hover { background: rgba(255,255,255,.15); }
-  /* push the app down and re-anchor its sticky bars */
-  body { margin-top: 40px !important; }
+  /* Offset the whole app by the banner height WITHOUT changing body/#root
+     height (the apps rely on html,body,#root{height:100%}; adding a body
+     margin would make #root taller than the viewport and break their
+     flex layout). padding-top on <html> plus box-sizing keeps 100% intact. */
+  html { padding-top: 40px !important; box-sizing: border-box; }
+  /* re-anchor the apps' own sticky bars below our banner */
   .app-header { top: 40px !important; }
   .active-filters-bar { top: 102px !important; }
   /* hide original upload UI + viewer/admin toggle */
