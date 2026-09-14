@@ -1,0 +1,540 @@
+"""
+MIS Company - single Python application.
+
+    pip install -r requirements.txt
+    python app.py            ->  http://<this-machine>:8000
+
+ONE link, ONE screen for everything:
+
+  1. Login page
+  2. Home page - pick one of the three applications
+  3. The ORIGINAL M3M / Smartworld / NBH application, unchanged,
+     with its data auto-loaded from an Excel folder.
+
+The three original apps run as internal engines on 127.0.0.1 (ports
+9101-9103, not reachable from the network). This gateway is the only
+front door: it signs users in, shows the home page, and reverse-proxies
+the selected application.
+
+EXCEL DATA (replaces the upload feature):
+  Drop each company's Excel into its folder -
+
+      data/m3m/           data/smartworld/        data/nbh/
+
+  The newest .xlsx in each folder is auto-loaded into that company's
+  engine at startup and again whenever the file changes. Replace the
+  Excel, wait a few seconds, refresh the browser. No restart needed.
+  The in-app Upload buttons/screens are hidden by the gateway; the
+  application code itself is completely untouched.
+
+Accounts (change in ACCOUNTS below):
+      m3m / M3M@123      smartworld / SW@123      nbh / NBH@123
+"""
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+import httpx
+import uvicorn
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+ROOT = Path(__file__).resolve().parent
+DATA = ROOT / "data"
+PORT = int(os.environ.get("PORT", 8000))
+PY = sys.executable
+
+# ------------------------------------------------------------ configuration
+
+ACCOUNTS = {
+    "m3m":        {"password": "M3M@123"},
+    "smartworld": {"password": "SW@123"},
+    "nbh":        {"password": "NBH@123"},
+}
+
+APPS = {
+    "m3m": {
+        "name": "M3M MIS",
+        "title": "M3M Customer Complaint MIS",
+        "desc": "Customer complaint dashboard for M3M SFDC exports.",
+        "accent": "#C9A648",
+        "port": 9101,
+        "data_dir": "m3m",
+        "cwd": ROOT / "apps" / "m3m-mis" / "backend",
+        "cmd": [PY, "-c",
+                "import sys, uvicorn; sys.path.insert(0, '.'); import api_app; "
+                "api_app.mount_frontend('../frontend'); "
+                "uvicorn.run(api_app.app, host='127.0.0.1', port=9101, log_level='warning')"],
+    },
+    "smartworld": {
+        "name": "Smartworld MIS",
+        "title": "Smartworld Customer Complaint MIS",
+        "desc": "Same engine on the Compile SW Data schema.",
+        "accent": "#2BAE8E",
+        "port": 9102,
+        "data_dir": "smartworld",
+        "cwd": ROOT / "apps" / "sw-mis" / "backend",
+        "cmd": [PY, "-c",
+                "import sys, uvicorn; sys.path.insert(0, '.'); import api_app; "
+                "api_app.mount_frontend('../frontend'); "
+                "uvicorn.run(api_app.app, host='127.0.0.1', port=9102, log_level='warning')"],
+    },
+    "nbh": {
+        "name": "NBH MIS",
+        "title": "NBH Complaint Management Dashboard",
+        "desc": "NoBrokerHood facility-management complaint data.",
+        "accent": "#E4572E",
+        "port": 9103,
+        "data_dir": "nbh",
+        "cwd": ROOT / "apps" / "nbh-mis" / "backend",
+        "cmd": [PY, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1",
+                "--port", "9103", "--log-level", "warning"],
+        "root_redirect": "/dashboard",   # NBH's "/" route is its upload page
+    },
+}
+
+SESSION_TTL = 12 * 3600
+COOKIE = "mis_session"
+
+# ------------------------------------------------------------------ session
+
+_secret_file = ROOT / ".session_secret"
+if _secret_file.exists():
+    SECRET = _secret_file.read_bytes()
+else:
+    SECRET = secrets.token_bytes(32)
+    _secret_file.write_bytes(SECRET)
+
+
+def _b64e(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def _b64d(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def make_session(username: str, app_id: str | None) -> str:
+    payload = _b64e(json.dumps({"u": username, "a": app_id, "t": int(time.time())}).encode())
+    sig = _b64e(hmac.new(SECRET, payload.encode(), hashlib.sha256).digest())
+    return f"{payload}.{sig}"
+
+
+def read_session(token: str | None):
+    if not token or "." not in token:
+        return None
+    payload, sig = token.rsplit(".", 1)
+    good = _b64e(hmac.new(SECRET, payload.encode(), hashlib.sha256).digest())
+    if not hmac.compare_digest(sig, good):
+        return None
+    try:
+        data = json.loads(_b64d(payload))
+    except Exception:
+        return None
+    if int(time.time()) - int(data.get("t", 0)) > SESSION_TTL:
+        return None
+    if data.get("a") is not None and data["a"] not in APPS:
+        return None
+    return data
+
+
+def set_session_cookie(resp: Response, username: str, app_id: str | None):
+    resp.set_cookie(COOKIE, make_session(username, app_id),
+                    max_age=SESSION_TTL, httponly=True, samesite="lax", path="/")
+
+
+# ---------------------------------------------------------- HTML: login/home
+
+_BASE_CSS = """
+:root{--navy-900:#0F1F3D;--navy-700:#1F3864;--teal-500:#0F9B8E;--teal-600:#0C7F74;
+--teal-100:#E3F5F3;--red-600:#C62828;--border:#E3E8F0;--text-900:#131A2A;
+--text-600:#4A5568;--text-400:#8892A3;
+--font:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",Roboto,Helvetica,Arial,sans-serif}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{font-family:var(--font);font-size:14px;color:var(--text-900);background:#F1F4F9}
+"""
+
+LOGIN_HTML = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MIS Company — Sign in</title>
+<style>{_BASE_CSS}
+.page{{min-height:100%;display:grid;grid-template-columns:1fr 1fr}}
+.hero{{background:linear-gradient(150deg,var(--navy-900),var(--navy-700));color:#fff;
+padding:56px;display:flex;flex-direction:column;justify-content:space-between}}
+.wordmark{{font-weight:800;font-size:16px}}.wordmark span{{font-weight:400;opacity:.65}}
+.hero h1{{font-size:32px;line-height:1.2;margin:0 0 10px;max-width:16ch}}
+.lede{{opacity:.75;max-width:44ch;margin:0 0 32px;line-height:1.55}}
+.list{{border-top:1px solid rgba(255,255,255,.18)}}
+.row{{display:grid;grid-template-columns:4px 150px 1fr;gap:18px;padding:15px 0;
+border-bottom:1px solid rgba(255,255,255,.18);align-items:baseline}}
+.rail{{align-self:stretch;border-radius:2px}}.cname{{font-weight:700;white-space:nowrap}}
+.cdesc{{opacity:.7;font-size:13px}}.foot{{font-size:12px;opacity:.55}}
+.side{{display:flex;align-items:center;justify-content:center;padding:40px 28px}}
+.card{{width:100%;max-width:360px;background:#fff;border:1px solid var(--border);
+border-radius:10px;box-shadow:0 4px 16px rgba(15,31,61,.08);padding:30px}}
+.card h2{{margin:0 0 4px;font-size:20px}}.hint{{color:var(--text-600);font-size:13px;margin:0 0 22px}}
+.field{{margin-bottom:15px}}
+label{{display:block;font-size:12.5px;color:var(--text-600);margin-bottom:5px;font-weight:600}}
+input{{width:100%;border:1px solid var(--border);border-radius:6px;padding:10px 12px;font:inherit;outline:none}}
+input:focus-visible{{border-color:var(--teal-500);box-shadow:0 0 0 3px var(--teal-100)}}
+.err{{color:var(--red-600);font-size:13px;margin:0 0 12px;min-height:16px}}
+button{{width:100%;background:var(--teal-500);color:#fff;border:0;border-radius:6px;
+padding:11px;font:inherit;font-weight:700;cursor:pointer}}
+button:hover{{background:var(--teal-600)}}button:disabled{{opacity:.6;cursor:default}}
+.note{{margin-top:20px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--text-400)}}
+.note code{{color:var(--text-600);font-size:11.5px}}
+@media(max-width:860px){{.page{{grid-template-columns:1fr}}.hero{{padding:32px 24px;gap:24px}}}}
+</style></head><body>
+<div class="page">
+  <div class="hero">
+    <div class="wordmark">MIS Company <span>/ complaint management suite</span></div>
+    <div>
+      <h1>One link, three dashboards.</h1>
+      <p class="lede">Sign in, then pick your application from the home screen.
+      Data loads automatically from each company's Excel folder on the server.</p>
+      <div class="list">
+        <div class="row"><span class="rail" style="background:#C9A648"></span>
+          <span class="cname">M3M MIS</span><span class="cdesc">Customer complaint dashboard for M3M SFDC exports.</span></div>
+        <div class="row"><span class="rail" style="background:#2BAE8E"></span>
+          <span class="cname">Smartworld MIS</span><span class="cdesc">Same engine on the Compile SW Data schema.</span></div>
+        <div class="row"><span class="rail" style="background:#E4572E"></span>
+          <span class="cname">NBH MIS</span><span class="cdesc">NoBrokerHood facility-management complaint data.</span></div>
+      </div>
+    </div>
+    <div class="foot">Internal tool · to change the data, replace the Excel in the server's data folder</div>
+  </div>
+  <div class="side"><div class="card">
+    <h2>Sign in</h2>
+    <p class="hint">Use your team account, then choose an application.</p>
+    <div class="field"><label for="u">Username</label><input id="u" autocomplete="username" autofocus/></div>
+    <div class="field"><label for="p">Password</label><input id="p" type="password" autocomplete="current-password"/></div>
+    <p class="err" id="err"></p>
+    <button id="go">Sign in</button>
+    <div class="note">Default accounts — change in <code>app.py</code>:<br/>
+      <code>m3m / M3M@123</code> · <code>smartworld / SW@123</code> · <code>nbh / NBH@123</code></div>
+  </div></div>
+</div>
+<script>
+const $=(i)=>document.getElementById(i);
+async function go(){{
+  $("go").disabled=true;$("err").textContent="";
+  try{{
+    const r=await fetch("/__gate/login",{{method:"POST",headers:{{"Content-Type":"application/json"}},
+      body:JSON.stringify({{username:$("u").value,password:$("p").value}})}});
+    if(r.ok){{location.replace("/");return}}
+    const d=await r.json().catch(()=>({{}}));$("err").textContent=d.error||"Sign-in failed.";
+  }}catch{{$("err").textContent="Could not reach the server."}}
+  $("go").disabled=false;
+}}
+$("go").addEventListener("click",go);
+for(const i of ["u","p"])$(i).addEventListener("keydown",(e)=>e.key==="Enter"&&go());
+</script></body></html>"""
+
+
+def home_html(username: str) -> str:
+    cards = "".join(
+        f"""<a class="app-card" href="/__gate/select/{aid}">
+              <div class="mark" style="background:{a['accent']}">{a['name'].split()[0]}</div>
+              <div class="body">
+                <div class="t">{a['name']}</div>
+                <div class="d">{a['desc']}</div>
+              </div>
+              <div class="arrow">→</div>
+            </a>"""
+        for aid, a in APPS.items()
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>MIS Company — Home</title>
+<style>{_BASE_CSS}
+.top{{background:linear-gradient(135deg,var(--navy-900),var(--navy-700));color:#fff;
+padding:14px 24px;display:flex;justify-content:space-between;align-items:center}}
+.top .wm{{font-weight:800}}.top .wm span{{font-weight:400;opacity:.65}}
+.top a{{color:#fff;font-size:13px;border:1px solid rgba(255,255,255,.35);
+border-radius:6px;padding:6px 12px;text-decoration:none}}
+.top a:hover{{background:rgba(255,255,255,.15)}}
+.wrap{{max-width:760px;margin:0 auto;padding:48px 24px}}
+h1{{font-size:24px;margin:0 0 6px}}
+.sub{{color:var(--text-600);margin:0 0 28px}}
+.app-card{{display:flex;align-items:center;gap:18px;background:#fff;
+border:1px solid var(--border);border-radius:10px;box-shadow:0 1px 2px rgba(15,31,61,.06);
+padding:18px 20px;margin-bottom:14px;text-decoration:none;color:inherit;transition:box-shadow .12s}}
+.app-card:hover{{box-shadow:0 4px 16px rgba(15,31,61,.12)}}
+.mark{{width:46px;height:46px;border-radius:10px;display:flex;align-items:center;
+justify-content:center;color:#fff;font-weight:800;font-size:13px;flex:0 0 auto}}
+.body{{flex:1}}.t{{font-weight:700;font-size:15px}}.d{{color:var(--text-600);font-size:13px;margin-top:2px}}
+.arrow{{color:var(--text-400);font-size:20px}}
+.note{{margin-top:24px;font-size:12.5px;color:var(--text-400)}}
+</style></head><body>
+<div class="top">
+  <div class="wm">MIS Company <span>/ home</span></div>
+  <div><span style="opacity:.7;font-size:13px;margin-right:12px">{username}</span>
+  <a href="/__gate/logout">Sign out</a></div>
+</div>
+<div class="wrap">
+  <h1>Choose an application</h1>
+  <p class="sub">Each application loads its data from its own Excel folder on the server.</p>
+  {cards}
+  <p class="note">To update the numbers: replace the Excel in
+  <b>data/m3m</b>, <b>data/smartworld</b> or <b>data/nbh</b> on the server,
+  wait a few seconds, then refresh inside the application.</p>
+</div></body></html>"""
+
+
+# ------------------------------------------ injected into every proxied page
+
+# Hides the original apps' upload UI without changing a single app file:
+#  - M3M/SW: removes the "Upload New File" header button; if the upload
+#    landing screen ever shows (empty data folder), replaces it with a note.
+#  - NBH: hides the "Upload" nav tab (NavLink to "/").
+INJECT = """
+<style>
+  nav a[href="/"] { display: none !important; }
+</style>
+<div style="position:fixed;right:14px;bottom:14px;z-index:2147483647;
+  font:12px/1 'Segoe UI',Arial,sans-serif;background:#0F1F3D;color:#fff;
+  border:1px solid #2C4A7C;border-radius:6px;padding:7px 10px;opacity:.93">
+  __USER__ &nbsp;·&nbsp; <a href="/__gate/home" style="color:#fff">Home</a>
+  &nbsp;·&nbsp; <a href="/__gate/logout" style="color:#fff">Sign out</a>
+</div>
+<script>
+(function () {
+  function sweep(root) {
+    (root.querySelectorAll ? root.querySelectorAll("button") : []).forEach(function (b) {
+      if (/upload new file/i.test(b.textContent || "")) b.remove();
+    });
+    var up = root.querySelector && root.querySelector(".upload-screen .upload-card");
+    if (up) up.innerHTML =
+      "<h1 style='margin:0 0 8px'>Data loads automatically</h1>" +
+      "<p style='color:#4A5568'>This application reads its Excel from the server's " +
+      "data folder. Ask the administrator to place the file there — " +
+      "no manual upload is needed.</p>";
+  }
+  var run = function () { sweep(document); };
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", run);
+  else run();
+  new MutationObserver(run).observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
+"""
+
+# ------------------------------------------------------------------ gateway
+
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
+
+HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+       "te", "trailers", "transfer-encoding", "upgrade", "host",
+       "content-length", "accept-encoding", "content-encoding"}
+
+
+@app.post("/__gate/login")
+async def login(request: Request):
+    try:
+        body = await request.json()
+        username = str(body.get("username", "")).strip().lower()
+        password = str(body.get("password", ""))
+    except Exception:
+        return JSONResponse({"error": "Bad request."}, status_code=400)
+    acct = ACCOUNTS.get(username)
+    if not acct or not hmac.compare_digest(acct["password"], password):
+        return JSONResponse({"error": "Incorrect username or password."}, status_code=401)
+    resp = JSONResponse({"ok": True})
+    set_session_cookie(resp, username, None)
+    return resp
+
+
+@app.get("/__gate/logout")
+async def logout():
+    resp = RedirectResponse("/", status_code=302)
+    resp.delete_cookie(COOKIE, path="/")
+    return resp
+
+
+@app.get("/__gate/home")
+async def go_home(request: Request):
+    s = read_session(request.cookies.get(COOKIE))
+    resp = RedirectResponse("/", status_code=302)
+    if s:
+        set_session_cookie(resp, s["u"], None)
+    return resp
+
+
+@app.get("/__gate/select/{app_id}")
+async def select_app(app_id: str, request: Request):
+    s = read_session(request.cookies.get(COOKIE))
+    if not s or app_id not in APPS:
+        return RedirectResponse("/", status_code=302)
+    target = APPS[app_id].get("root_redirect", "/")
+    resp = RedirectResponse(target, status_code=302)
+    set_session_cookie(resp, s["u"], app_id)
+    return resp
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"])
+async def route_all(request: Request, path: str):
+    session = read_session(request.cookies.get(COOKIE))
+
+    if session is None:
+        if request.method in ("GET", "HEAD"):
+            return HTMLResponse(LOGIN_HTML)
+        return JSONResponse({"error": "Not signed in."}, status_code=401)
+
+    if session.get("a") is None:
+        if request.method in ("GET", "HEAD"):
+            return HTMLResponse(home_html(session["u"]))
+        return JSONResponse({"error": "No application selected."}, status_code=400)
+
+    target = APPS[session["a"]]
+
+    # NBH's "/" route is its upload page - send people to the dashboard.
+    if path == "" and "root_redirect" in target:
+        return RedirectResponse(target["root_redirect"], status_code=302)
+
+    url = f"http://127.0.0.1:{target['port']}/{path}"
+    if request.url.query:
+        url += "?" + request.url.query
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
+    body = await request.body()
+
+    try:
+        upstream = await client.request(request.method, url, headers=headers, content=body)
+    except httpx.ConnectError:
+        return Response(
+            f"{target['title']} engine is not running yet - give it a few seconds and refresh.\n"
+            f"If this persists, check the console where app.py is running.",
+            status_code=502, media_type="text/plain")
+
+    out_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in HOP}
+    ctype = upstream.headers.get("content-type", "")
+
+    if "text/html" in ctype:
+        html = upstream.text
+        inject = INJECT.replace("__USER__", session["u"])
+        i = html.lower().rfind("</body>")
+        html = (html[:i] + inject + html[i:]) if i != -1 else html + inject
+        return Response(html, status_code=upstream.status_code, headers=out_headers, media_type=ctype)
+
+    return Response(upstream.content, status_code=upstream.status_code, headers=out_headers)
+
+
+# ----------------------------------------------------------- engine startup
+
+_procs: list[subprocess.Popen] = []
+
+
+def start_engines():
+    for aid, a in APPS.items():
+        p = subprocess.Popen(a["cmd"], cwd=str(a["cwd"]))
+        _procs.append(p)
+        print(f"  [{p.pid:>6}] {a['title']}  (internal :{a['port']})")
+
+
+def stop_engines(*_):
+    for p in _procs:
+        if p.poll() is None:
+            p.terminate()
+    for p in _procs:
+        try:
+            p.wait(timeout=5)
+        except Exception:
+            p.kill()
+
+
+# ------------------------------------------------- Excel folder auto-ingest
+
+_ingested: dict[str, tuple] = {}
+
+
+def _newest_excel(folder: Path):
+    if not folder.exists():
+        return None
+    files = [f for f in folder.iterdir()
+             if f.suffix.lower() in (".xlsx", ".xls") and not f.name.startswith("~$")]
+    if not files:
+        return None
+    return max(files, key=lambda f: f.stat().st_mtime)
+
+
+def _ingest(aid: str, file: Path):
+    a = APPS[aid]
+    key = (str(file), file.stat().st_mtime)
+    _ingested[aid] = key  # claim immediately so the poller doesn't double-send
+    try:
+        with open(file, "rb") as fh:
+            r = httpx.post(f"http://127.0.0.1:{a['port']}/api/upload",
+                           files={"file": (file.name, fh,
+                                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+                           timeout=120)
+        if r.status_code == 200:
+            print(f"  [data {aid}] loaded {file.name} into {a['title']}")
+        else:
+            print(f"  [data {aid}] engine rejected {file.name} "
+                  f"({r.status_code}): {r.text[:300]}")
+    except Exception as e:
+        # Engine probably still starting - un-claim so the poller retries.
+        _ingested.pop(aid, None)
+        _ingested.setdefault("_warned_" + aid, None)
+
+
+def _watch_loop():
+    time.sleep(4)  # give the engines a moment
+    while True:
+        for aid, a in APPS.items():
+            file = _newest_excel(DATA / a["data_dir"])
+            if file is None:
+                continue
+            key = (str(file), file.stat().st_mtime)
+            if _ingested.get(aid) != key:
+                _ingest(aid, file)
+        time.sleep(5)
+
+
+# -------------------------------------------------------------------- start
+
+def lan_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "localhost"
+
+
+def main():
+    print("\nStarting MIS Company (single application)...\n")
+    start_engines()
+    threading.Thread(target=_watch_loop, daemon=True).start()
+
+    print(f"\n  Share this link:   http://{lan_ip()}:{PORT}")
+    print(f"  On this machine:   http://localhost:{PORT}\n")
+    print("  Accounts:  m3m / M3M@123   smartworld / SW@123   nbh / NBH@123")
+    print("  Excel folders (auto-loaded, newest file wins):")
+    print("      data/m3m/    data/smartworld/    data/nbh/")
+    print("  Ctrl+C stops everything.\n")
+
+    signal.signal(signal.SIGINT, lambda *_: (stop_engines(), sys.exit(0)))
+    signal.signal(signal.SIGTERM, lambda *_: (stop_engines(), sys.exit(0)))
+
+    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
+    stop_engines()
+
+
+if __name__ == "__main__":
+    main()

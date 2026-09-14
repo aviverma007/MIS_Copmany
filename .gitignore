@@ -1,4 +1,7 @@
-node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
 .session_secret
 *.log
 .DS_Store
