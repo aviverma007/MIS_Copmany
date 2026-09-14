@@ -359,7 +359,8 @@ async def login(request: Request):
 
 @app.get("/__gate/logout")
 async def logout():
-    resp = RedirectResponse("/", status_code=302)
+    # Serve the login page directly - no redirect hop, instant.
+    resp = HTMLResponse(LOGIN_HTML)
     resp.delete_cookie(COOKIE, path="/")
     return resp
 
@@ -367,9 +368,13 @@ async def logout():
 @app.get("/__gate/home")
 async def go_home(request: Request):
     s = read_session(request.cookies.get(COOKIE))
-    resp = RedirectResponse("/", status_code=302)
-    if s:
-        set_session_cookie(resp, s["u"], None)
+    if not s:
+        resp = HTMLResponse(LOGIN_HTML)
+        resp.delete_cookie(COOKIE, path="/")
+        return resp
+    # Serve the home page directly - no redirect hop, instant.
+    resp = HTMLResponse(home_html(s["u"]))
+    set_session_cookie(resp, s["u"], None)
     return resp
 
 
