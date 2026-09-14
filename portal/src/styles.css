@@ -1,0 +1,314 @@
+:root {
+  --ink: #0e1520;
+  --panel: #151f2c;
+  --panel-2: #1a2634;
+  --line: #243244;
+  --text: #e9eef4;
+  --muted: #8393a5;
+  --danger: #e4572e;
+  --radius: 6px;
+  --font:
+    "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- login layout ---------- */
+
+.login {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 4fr);
+}
+
+.login-left {
+  padding: 56px 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-right: 1px solid var(--line);
+}
+
+.wordmark {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.wordmark span {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.left-body h1 {
+  font-size: 34px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+  max-width: 18ch;
+}
+
+.left-body p.lede {
+  color: var(--muted);
+  margin: 0 0 36px;
+  max-width: 46ch;
+}
+
+/* ledger of the three products */
+.ledger {
+  border-top: 1px solid var(--line);
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: 3px 130px 1fr;
+  gap: 20px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+  align-items: baseline;
+}
+
+.ledger-rail {
+  align-self: stretch;
+  border-radius: 2px;
+}
+
+.ledger-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ledger-desc {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.left-foot {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* ---------- login card ---------- */
+
+.login-right {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 32px;
+  background: var(--panel);
+}
+
+.card {
+  width: 100%;
+  max-width: 360px;
+}
+
+.card h2 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 4px;
+  letter-spacing: -0.01em;
+}
+
+.card .hint {
+  color: var(--muted);
+  font-size: 13.5px;
+  margin: 0 0 24px;
+}
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.field input {
+  width: 100%;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.field input:focus-visible {
+  border-color: var(--muted);
+  box-shadow: 0 0 0 3px rgba(131, 147, 165, 0.25);
+}
+
+.error {
+  color: var(--danger);
+  font-size: 13.5px;
+  margin: 0 0 14px;
+}
+
+button.primary {
+  width: 100%;
+  padding: 11px 12px;
+  font: inherit;
+  font-weight: 600;
+  color: #0d1117;
+  background: var(--text);
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+button.primary:hover {
+  background: #fff;
+}
+
+button.primary:focus-visible {
+  outline: 2px solid var(--muted);
+  outline-offset: 2px;
+}
+
+.demo-creds {
+  margin-top: 26px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.demo-creds code {
+  color: var(--text);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+/* ---------- signed-in shell ---------- */
+
+.shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  height: 46px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.topbar .app-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.topbar .who {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.topbar .spacer {
+  flex: 1;
+}
+
+.topbar a,
+.topbar button.ghost {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.topbar a:hover,
+.topbar button.ghost:hover {
+  border-color: var(--muted);
+}
+
+.frame-wrap {
+  flex: 1;
+  min-height: 0;
+  background: #fff;
+}
+
+.frame-wrap iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.frame-note {
+  padding: 10px 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--ink);
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 900px) {
+  .login {
+    grid-template-columns: 1fr;
+  }
+  .login-left {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 36px 24px;
+    gap: 28px;
+  }
+  .left-body h1 {
+    font-size: 27px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .card {
+    animation: rise 0.25s ease-out;
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}

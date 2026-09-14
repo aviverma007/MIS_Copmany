@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas text-ink-800 antialiased;
+  font-feature-settings: "tnum" 1, "cv02" 1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.mis-table th {
+  @apply text-left text-[11px] font-semibold uppercase tracking-wide text-ink-500 bg-canvas border-b border-line px-3 py-2 whitespace-nowrap;
+}
+
+.mis-table td {
+  @apply text-sm text-ink-800 border-b border-line px-3 py-2 whitespace-nowrap;
+}
+
+.mis-table tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+.card {
+  @apply bg-surface border border-line rounded-md shadow-card;
+}
+
+.btn {
+  @apply inline-flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-700 hover:bg-canvas transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-primary {
+  @apply inline-flex items-center gap-1.5 rounded-md bg-brand-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.input {
+  @apply block w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink-800 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500;
+}
+
+.section-title {
+  @apply text-[13px] font-semibold uppercase tracking-wide text-ink-600;
+}
