@@ -50,6 +50,10 @@ import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+
+def page(html: str, status: int = 200) -> HTMLResponse:
+    return HTMLResponse(html, status_code=status, headers={"Cache-Control": "no-store"})
+
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 PORT = int(os.environ.get("PORT", 8000))
@@ -414,7 +418,7 @@ async def login(request: Request):
 @app.get("/__gate/logout")
 async def logout():
     # Serve the login page directly - no redirect hop, instant.
-    resp = HTMLResponse(LOGIN_HTML)
+    resp = page(LOGIN_HTML)
     resp.delete_cookie(COOKIE, path="/")
     return resp
 
@@ -423,11 +427,11 @@ async def logout():
 async def go_home(request: Request):
     s = read_session(request.cookies.get(COOKIE))
     if not s:
-        resp = HTMLResponse(LOGIN_HTML)
+        resp = page(LOGIN_HTML)
         resp.delete_cookie(COOKIE, path="/")
         return resp
     # Serve the home page directly - no redirect hop, instant.
-    resp = HTMLResponse(home_html(s["u"]))
+    resp = page(home_html(s["u"]))
     set_session_cookie(resp, s["u"], None)
     return resp
 
@@ -449,12 +453,12 @@ async def route_all(request: Request, path: str):
 
     if session is None:
         if request.method in ("GET", "HEAD"):
-            return HTMLResponse(LOGIN_HTML)
+            return page(LOGIN_HTML)
         return JSONResponse({"error": "Not signed in."}, status_code=401)
 
     if session.get("a") is None:
         if request.method in ("GET", "HEAD"):
-            return HTMLResponse(home_html(session["u"]))
+            return page(home_html(session["u"]))
         return JSONResponse({"error": "No application selected."}, status_code=400)
 
     target = APPS[session["a"]]
@@ -464,7 +468,7 @@ async def route_all(request: Request, path: str):
     ready, err = data_ready(session["a"])
     if not ready and request.method == "GET" and \
             "text/html" in request.headers.get("accept", ""):
-        return HTMLResponse(loading_html(target["title"], err))
+        return page(loading_html(target["title"], err))
 
     # NBH's "/" route is its upload page - send people to the dashboard.
     if path == "" and "root_redirect" in target:
@@ -492,6 +496,9 @@ async def route_all(request: Request, path: str):
         inject = INJECT.replace("__USER__", session["u"])
         i = html.lower().rfind("</body>")
         html = (html[:i] + inject + html[i:]) if i != -1 else html + inject
+        out_headers["cache-control"] = "no-store"
+        out_headers.pop("etag", None)
+        out_headers.pop("last-modified", None)
         return Response(html, status_code=upstream.status_code, headers=out_headers, media_type=ctype)
 
     return Response(upstream.content, status_code=upstream.status_code, headers=out_headers)
