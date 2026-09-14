@@ -5,8 +5,9 @@ Pure Python (FastAPI). No Node required.
 
 The original M3M, Smartworld and NBH applications run **completely unchanged**
 inside this app — every tab, chart, filter drawer, report and Excel/PDF export
-is the source projects' own code. The only functional difference: the upload
-feature is hidden, because data now comes from Excel files in folders.
+is the source projects' own code. The only functional differences: the upload
+feature is hidden (data comes from Excel files in folders) and the
+Viewer/Admin toggle in the header is hidden.
 
 ## Run it
 
@@ -21,13 +22,8 @@ shareable link for other users.
 Flow: **Sign in → Home page → choose an application** (switch any time via
 the "Home" chip at the bottom-right of every page).
 
-| Account (default)       | Password  |
-| ----------------------- | --------- |
-| `m3m`                   | `M3M@123` |
-| `smartworld`            | `SW@123`  |
-| `nbh`                   | `NBH@123` |
-
-Change accounts in `app.py` (ACCOUNTS at the top).
+Single account (default): **`admin` / `admin`** — change it in `app.py`
+(ACCOUNTS at the top).
 
 ## The Excel data (replaces the upload feature)
 

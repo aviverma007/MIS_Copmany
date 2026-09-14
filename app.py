@@ -27,8 +27,8 @@ EXCEL DATA (replaces the upload feature):
   The in-app Upload buttons/screens are hidden by the gateway; the
   application code itself is completely untouched.
 
-Accounts (change in ACCOUNTS below):
-      m3m / M3M@123      smartworld / SW@123      nbh / NBH@123
+Account (change in ACCOUNTS below):
+      admin / admin
 """
 
 import base64
@@ -58,9 +58,7 @@ PY = sys.executable
 # ------------------------------------------------------------ configuration
 
 ACCOUNTS = {
-    "m3m":        {"password": "M3M@123"},
-    "smartworld": {"password": "SW@123"},
-    "nbh":        {"password": "NBH@123"},
+    "admin": {"password": "admin"},
 }
 
 APPS = {
@@ -217,13 +215,13 @@ button:hover{{background:var(--teal-600)}}button:disabled{{opacity:.6;cursor:def
   </div>
   <div class="side"><div class="card">
     <h2>Sign in</h2>
-    <p class="hint">Use your team account, then choose an application.</p>
+    <p class="hint">Sign in, then choose an application.</p>
     <div class="field"><label for="u">Username</label><input id="u" autocomplete="username" autofocus/></div>
     <div class="field"><label for="p">Password</label><input id="p" type="password" autocomplete="current-password"/></div>
     <p class="err" id="err"></p>
     <button id="go">Sign in</button>
-    <div class="note">Default accounts — change in <code>app.py</code>:<br/>
-      <code>m3m / M3M@123</code> · <code>smartworld / SW@123</code> · <code>nbh / NBH@123</code></div>
+    <div class="note">Default account — change in <code>app.py</code>:<br/>
+      <code>admin / admin</code></div>
   </div></div>
 </div>
 <script>
@@ -303,6 +301,7 @@ justify-content:center;color:#fff;font-weight:800;font-size:13px;flex:0 0 auto}}
 INJECT = """
 <style>
   nav a[href="/"] { display: none !important; }
+  .role-badge { display: none !important; }
 </style>
 <div style="position:fixed;right:14px;bottom:14px;z-index:2147483647;
   font:12px/1 'Segoe UI',Arial,sans-serif;background:#0F1F3D;color:#fff;
@@ -524,7 +523,7 @@ def main():
 
     print(f"\n  Share this link:   http://{lan_ip()}:{PORT}")
     print(f"  On this machine:   http://localhost:{PORT}\n")
-    print("  Accounts:  m3m / M3M@123   smartworld / SW@123   nbh / NBH@123")
+    print("  Account:  admin / admin")
     print("  Excel folders (auto-loaded, newest file wins):")
     print("      data/m3m/    data/smartworld/    data/nbh/")
     print("  Ctrl+C stops everything.\n")
