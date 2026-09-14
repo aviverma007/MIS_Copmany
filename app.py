@@ -292,6 +292,34 @@ justify-content:center;color:#fff;font-weight:800;font-size:13px;flex:0 0 auto}}
 </div></body></html>"""
 
 
+def loading_html(title: str, error: str | None) -> str:
+    if error:
+        body = f"""<h1>Data problem</h1>
+        <p class="msg err">{error}</p>
+        <p class="msg">Fix or replace the Excel in the data folder on the server -
+        this page will continue checking automatically.</p>"""
+    else:
+        body = f"""<div class="spin"></div><h1>Loading data…</h1>
+        <p class="msg">Reading the Excel for <b>{title}</b>.
+        You'll be taken in automatically.</p>"""
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
+<meta http-equiv="refresh" content="2"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>{title}</title><style>{_BASE_CSS}
+.wrap{{min-height:100%;display:flex;flex-direction:column;align-items:center;
+justify-content:center;text-align:center;padding:24px}}
+h1{{font-size:24px;margin:18px 0 6px}}
+.msg{{color:var(--text-600);max-width:52ch;line-height:1.55;margin:6px 0}}
+.msg.err{{color:var(--red-600);font-weight:600}}
+.spin{{width:42px;height:42px;border:4px solid var(--border);
+border-top-color:var(--teal-500);border-radius:50%;animation:r 1s linear infinite}}
+@keyframes r{{to{{transform:rotate(360deg)}}}}
+a{{color:var(--teal-600)}}
+</style></head><body><div class="wrap">{body}
+<p class="msg" style="font-size:12.5px">
+<a href="/__gate/home">← Back to home</a></p></div></body></html>"""
+
+
 # ------------------------------------------ injected into every proxied page
 
 # Hides the original apps' upload UI without changing a single app file:
@@ -431,6 +459,13 @@ async def route_all(request: Request, path: str):
 
     target = APPS[session["a"]]
 
+    # Until this app's Excel is loaded, page navigations get a friendly
+    # auto-refreshing "loading" screen instead of an empty application.
+    ready, err = data_ready(session["a"])
+    if not ready and request.method == "GET" and \
+            "text/html" in request.headers.get("accept", ""):
+        return HTMLResponse(loading_html(target["title"], err))
+
     # NBH's "/" route is its upload page - send people to the dashboard.
     if path == "" and "root_redirect" in target:
         return RedirectResponse(target["root_redirect"], status_code=302)
@@ -464,21 +499,18 @@ async def route_all(request: Request, path: str):
 
 # ----------------------------------------------------------- engine startup
 
-_procs: list[subprocess.Popen] = []
-
-
 def start_engines():
     for aid, a in APPS.items():
         p = subprocess.Popen(a["cmd"], cwd=str(a["cwd"]))
-        _procs.append(p)
+        _engine_procs[aid] = p
         print(f"  [{p.pid:>6}] {a['title']}  (internal :{a['port']})")
 
 
 def stop_engines(*_):
-    for p in _procs:
+    for p in _engine_procs.values():
         if p.poll() is None:
             p.terminate()
-    for p in _procs:
+    for p in _engine_procs.values():
         try:
             p.wait(timeout=5)
         except Exception:
@@ -487,7 +519,9 @@ def stop_engines(*_):
 
 # ------------------------------------------------- Excel folder auto-ingest
 
-_ingested: dict[str, tuple] = {}
+# aid -> {"key": (path, mtime), "ok": bool, "error": str|None}
+_ingest_state: dict[str, dict] = {}
+_engine_procs: dict[str, subprocess.Popen] = {}
 
 
 def _newest_excel(folder: Path):
@@ -500,38 +534,64 @@ def _newest_excel(folder: Path):
     return max(files, key=lambda f: f.stat().st_mtime)
 
 
+def data_ready(aid: str):
+    """(ready, error_message) for the gateway's loading interstitial."""
+    st = _ingest_state.get(aid)
+    if st and st.get("ok"):
+        return True, None
+    return False, (st or {}).get("error")
+
+
 def _ingest(aid: str, file: Path):
     a = APPS[aid]
     key = (str(file), file.stat().st_mtime)
-    _ingested[aid] = key  # claim immediately so the poller doesn't double-send
     try:
         with open(file, "rb") as fh:
             r = httpx.post(f"http://127.0.0.1:{a['port']}/api/upload",
                            files={"file": (file.name, fh,
                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-                           timeout=120)
+                           timeout=180)
         if r.status_code == 200:
+            _ingest_state[aid] = {"key": key, "ok": True, "error": None}
             print(f"  [data {aid}] loaded {file.name} into {a['title']}")
         else:
-            print(f"  [data {aid}] engine rejected {file.name} "
-                  f"({r.status_code}): {r.text[:300]}")
+            detail = r.text[:400]
+            _ingest_state[aid] = {"key": key, "ok": False,
+                                  "error": f"{file.name} was rejected: {detail}"}
+            print(f"  [data {aid}] engine REJECTED {file.name} ({r.status_code}): {detail}")
     except Exception as e:
-        # Engine probably still starting - un-claim so the poller retries.
-        _ingested.pop(aid, None)
-        _ingested.setdefault("_warned_" + aid, None)
+        # Engine not reachable yet (still importing pandas etc.) - leave state
+        # unset so the watcher retries on its next pass.
+        _ingest_state.pop(aid, None)
+        print(f"  [data {aid}] engine not ready yet ({type(e).__name__}) - will retry")
 
 
 def _watch_loop():
-    time.sleep(4)  # give the engines a moment
+    time.sleep(3)
     while True:
         for aid, a in APPS.items():
+            # --- supervise the engine: restart it if it died ---
+            p = _engine_procs.get(aid)
+            if p is not None and p.poll() is not None:
+                print(f"  [engine {aid}] exited with code {p.returncode} - restarting. "
+                      f"(If this repeats: pip install -r requirements.txt)")
+                _ingest_state.pop(aid, None)  # fresh engine has no data
+                np = subprocess.Popen(a["cmd"], cwd=str(a["cwd"]))
+                _engine_procs[aid] = np
+                continue  # give it a cycle to boot before uploading
+
+            # --- (re)load the newest Excel when it changes ---
             file = _newest_excel(DATA / a["data_dir"])
             if file is None:
+                _ingest_state.setdefault(aid, {"key": None, "ok": False,
+                    "error": f"No Excel file found in data/{a['data_dir']}/ - "
+                             f"place the file there."})
                 continue
             key = (str(file), file.stat().st_mtime)
-            if _ingested.get(aid) != key:
+            st = _ingest_state.get(aid)
+            if st is None or st.get("key") != key:
                 _ingest(aid, file)
-        time.sleep(5)
+        time.sleep(4)
 
 
 # -------------------------------------------------------------------- start
