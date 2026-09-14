@@ -1,0 +1,13 @@
+# Python dependencies for the three internal MIS engines (M3M, Smartworld, NBH)
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29
+pandas>=2.1
+numpy
+openpyxl>=3.1
+xlsxwriter>=3.1
+python-multipart>=0.0.9
+reportlab>=4.0
+pydantic>=2.6,<3
+Pillow
+matplotlib
+httpx>=0.25

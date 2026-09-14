@@ -1,13 +1,12 @@
 {
   "name": "mis-company",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "MIS Company - single fullstack complaint MIS for M3M, Smartworld and NBH",
+  "description": "MIS Company - one link, 3 logins, the original M3M/SW/NBH apps behind a Node gateway, Excel-folder driven",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "sample-data": "node scripts/make-sample-data.js",
-    "build-client": "cd client && npm install && npm run build"
+    "sample-data": "node scripts/make-sample-data.js"
   },
   "dependencies": {
     "express": "^4.19.2",

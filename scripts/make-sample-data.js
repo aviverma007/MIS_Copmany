@@ -2,7 +2,6 @@
 //   data/m3m/M3M_Test_Data.xlsx          (M3M SFDC-style headers)
 //   data/smartworld/SW_Test_Data.xlsx    (Smartworld-style headers)
 //   data/nbh/NBH_Test_Data.xlsx          (NBH-style headers)
-//   data/prebuilt/<company>.json         (normalized fallback JSON)
 //
 // Run:  npm run sample-data
 // Replace these excels with the real ones later - same folders, any filename.
@@ -10,7 +9,6 @@
 const fs = require("fs");
 const path = require("path");
 const XLSX = require("xlsx");
-const { load } = require("../server/loader");
 
 const DATA = path.join(__dirname, "..", "data");
 
@@ -135,14 +133,4 @@ writeExcel(m3mRows(320), "m3m", "M3M_Test_Data.xlsx", "Compile M3M Data");
 writeExcel(swRows(280), "smartworld", "SW_Test_Data.xlsx", "Compile SW Data");
 writeExcel(nbhRows(400), "nbh", "NBH_Test_Data.xlsx", "Compile NBH Data");
 
-// Prebuilt JSON fallback = the normalized version of the same test data.
-fs.mkdirSync(path.join(DATA, "prebuilt"), { recursive: true });
-for (const c of ["m3m", "smartworld", "nbh"]) {
-  const store = load(c, true);
-  fs.writeFileSync(
-    path.join(DATA, "prebuilt", `${c}.json`),
-    JSON.stringify(store.records)
-  );
-  console.log(`  wrote data/prebuilt/${c}.json  (${store.records.length} records)`);
-}
 console.log("Done.");

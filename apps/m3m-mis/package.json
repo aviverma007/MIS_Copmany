@@ -1,0 +1,22 @@
+{
+  "name": "m3m-mis-source",
+  "private": true,
+  "description": "Reference manifest for M3M Customer Complaint MIS. The app itself needs no npm build step - frontend/static/vendor/*.js are pre-built UMD bundles already checked into this repo. This file only documents which versions they came from, and the one dependency (docx) used by docs-generator/build_doc.js to produce the Word reference guide.",
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "htm": "3.1.1",
+    "chart.js": "4.5.1"
+  },
+  "devDependencies": {
+    "docx": "9.6.1"
+  },
+  "notes": [
+    "frontend/static/vendor/react.production.min.js         <- node_modules/react/umd/react.production.min.js",
+    "frontend/static/vendor/react-dom.production.min.js     <- node_modules/react-dom/umd/react-dom.production.min.js",
+    "frontend/static/vendor/htm.umd.js                      <- node_modules/htm/dist/htm.umd.js",
+    "frontend/static/vendor/chart.umd.min.js                <- node_modules/chart.js/dist/chart.umd.min.js",
+    "To refresh these bundles: npm install react@18 react-dom@18 htm chart.js@4, then re-copy the files above.",
+    "To regenerate the Word reference doc: npm install docx, then: node docs-generator/build_doc.js"
+  ]
+}

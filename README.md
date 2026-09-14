@@ -1,83 +1,83 @@
-# MIS Company — Single Fullstack Complaint MIS
+# MIS Company — One Link, Three Logins, the Original Apps
 
-**One application. One link. Three logins. Three companies. Three Excel folders.**
+A Node.js/Express gateway in front of the **original, unmodified** M3M,
+Smartworld and NBH MIS applications — so the look, feel and functionality
+are exactly the source projects', screen for screen (all tabs, reports,
+Excel/PDF exports, Manage Lists, everything).
 
-Node.js/Express backend + React frontend. Your login decides which company's
-dashboard and which company's Excel data you see — same look, feel and
-functionality for every company.
+Everyone opens the **same link**. Your login decides which company's
+application you see:
 
-| Login (default)         | Company    | Excel folder       |
-| ----------------------- | ---------- | ------------------ |
-| `m3m` / `M3M@123`       | M3M        | `data/m3m/`        |
-| `smartworld` / `SW@123` | Smartworld | `data/smartworld/` |
-| `nbh` / `NBH@123`       | NBH        | `data/nbh/`        |
+| Login (default)         | Application                        | Excel folder       |
+| ----------------------- | ---------------------------------- | ------------------ |
+| `m3m` / `M3M@123`       | M3M Customer Complaint MIS         | `data/m3m/`        |
+| `smartworld` / `SW@123` | Smartworld Customer Complaint MIS  | `data/smartworld/` |
+| `nbh` / `NBH@123`       | NBH Complaint Management Dashboard | `data/nbh/`        |
 
-Change passwords in `server/companies.js`.
+Change passwords in `server/index.js` (ACCOUNTS at the top).
 
 ## Run it
 
-Prerequisite: Node.js 18+ (zip/portable install works fine).
+Prerequisites: **Node.js 18+** and **Python 3.10+** (the original app
+engines are Python). Portable/zip installs of both work fine.
 
 ```bash
-npm install
+pip install -r requirements-all.txt   # once
+npm install                            # once
 npm start
 ```
 
-Open **http://localhost:8000** — the startup log also prints your LAN IP as a
-shareable link for other users on the network.
+Open **http://localhost:8000** — the startup log also prints your LAN IP as
+the link to share with other users. If your python isn't on PATH, set the
+`PYTHON` env var to its full path before `npm start`.
 
-## Updating the data (the whole point)
+## Updating the data
 
 1. Drop the new Excel into that company's folder, e.g. `data/m3m/M3M_Sept.xlsx`
-2. Refresh the browser — that's it.
+2. Wait a few seconds, refresh the browser. Done.
 
-- The **newest** `.xlsx` in the folder is always used (shown in the header).
-- No restart, no rebuild — the server checks the file's timestamp on every
-  request; there's also a **Reload data** button in the header to force it.
-- Sheet selection: a sheet whose name contains "data" (e.g. `Compile M3M
-  Data`) is preferred, else the first sheet.
-- Column headers are matched through per-company alias lists in
-  `server/companies.js`, taken from the original M3M / Smartworld / NBH
-  applications — so the real SFDC / NBH exports map automatically. Add
-  aliases there if a header isn't recognized (a warning banner in the app
-  tells you when a required column wasn't found).
-- If a folder has no Excel at all, prebuilt JSON test data from
-  `data/prebuilt/` is shown instead (with a banner saying so).
+The gateway watches the three folders and auto-uploads the **newest** `.xlsx`
+into that company's engine — at startup and whenever the file changes. No
+restart, no rebuild. The engines apply their own full processing exactly as
+before (column detection, SFDC day-first dates, business-rule formulas).
+If an engine rejects a file (wrong sheet/columns), the reason is printed in
+the `npm start` console.
 
-Current excels are **generated test data** — replace with real files anytime.
-Regenerate test data with `npm run sample-data`.
+The excels currently in `data/` are **generated test data**
+(`npm run sample-data` regenerates them) — replace them with the real
+exports any time.
 
-## Features
+## How it works
 
-- Login → company-scoped dashboard (server-side sessions, HttpOnly cookie)
-- KPI cards: total, open, closed, closure rate, average TAT
-- Charts: monthly opened-vs-closed trend, open/closed split, open-case
-  ageing buckets, top projects, top categories
-- Filters: project, category, open/closed, priority, opened date range,
-  free-text search — every number recomputes from the filtered set
-- Paginated complaints table
-- **Export Excel** of the current filtered view
-- Day-first date handling (`08/09/2026`, `08/09/2026, 11:05 am`) and Excel
-  serial dates, as in the original apps
+```
+Browser ──► Node gateway :8000
+             ├─ no session  → login page
+             └─ session     → reverse-proxy ALL traffic to that user's engine
+                              (plus a small sign-out chip on every page)
+                   ├─ M3M engine        127.0.0.1:9101  (original app, unchanged)
+                   ├─ Smartworld engine 127.0.0.1:9102  (original app, unchanged)
+                   └─ NBH engine        127.0.0.1:9103  (original app, unchanged)
+```
+
+- Engines bind to 127.0.0.1 only — not reachable from the network; the
+  gateway is the single front door.
+- Sessions are signed HttpOnly cookies (12h). Sign out via the bottom-right
+  chip or `/__gate/logout`.
+- The M3M/SW apps' own admin password for "Manage Lists" is unchanged from
+  the source projects.
 
 ## Structure
 
 ```
 ├── server/
-│   ├── index.js        Express app: auth, API, static client, export
-│   ├── companies.js    3 logins, 3 companies, column aliases  ← edit here
-│   ├── loader.js       Excel reading, normalization, hot reload
-│   └── analytics.js    Filters, KPIs, breakdowns, trend, paging
-├── client/             React (Vite) frontend — prebuilt dist/ committed
+│   ├── index.js      Node gateway: 3 logins, proxy, engine startup, folder watch
+│   └── login.html    Sign-in page
+├── apps/
+│   ├── m3m-mis/      Original M3M application (unmodified)
+│   ├── sw-mis/       Original Smartworld application (unmodified)
+│   └── nbh-mis/      Original NBH application (unmodified)
 ├── data/
 │   ├── m3m/ smartworld/ nbh/     ← drop each company's Excel here
-│   └── prebuilt/                 JSON test-data fallback
-└── scripts/make-sample-data.js   test-data generator
-```
-
-## Developing the frontend
-
-```bash
-cd client && npm install && npm run dev   # dev server on :5173, proxies /api to :8000
-npm run build                             # refresh client/dist used by npm start
+├── scripts/make-sample-data.js   Test-data generator
+└── requirements-all.txt          Python deps for the three engines
 ```

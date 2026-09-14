@@ -1,192 +1,287 @@
 // ---------------------------------------------------------------------------
-// MIS Company - single fullstack server.
+// MIS Company - Node/Express gateway.
 //
 //   npm install
-//   npm start          ->  http://<this-machine>:8000
+//   npm start            ->  http://<this-machine>:8000
 //
-// One link for everyone. Your login decides which company's dashboard and
-// which company's Excel data you see:
+// ONE link for everyone. Sign in and the gateway routes ALL your traffic to
+// YOUR company's application - which is the ORIGINAL M3M / Smartworld / NBH
+// app running unchanged as an internal engine (127.0.0.1 only), so the look,
+// feel and functionality are exactly the ones from the source projects.
 //
-//   m3m / M3M@123          -> data/m3m/
-//   smartworld / SW@123    -> data/smartworld/
-//   nbh / NBH@123          -> data/nbh/
+//   m3m / M3M@123          -> M3M MIS        (engine on 127.0.0.1:9101)
+//   smartworld / SW@123    -> Smartworld MIS (engine on 127.0.0.1:9102)
+//   nbh / NBH@123          -> NBH MIS        (engine on 127.0.0.1:9103)
 //
-// Replace an Excel in its folder and refresh the browser (or press the
-// Reload button in the header) - the new data is picked up automatically,
-// no restart or rebuild needed.
+// EXCEL FOLDERS: drop each company's Excel into data/<company>/. The gateway
+// watches the folders and auto-uploads the newest .xlsx into that company's
+// engine - at startup and whenever the file changes. Replace the Excel,
+// wait a moment, refresh the browser. No restart, no rebuild.
+//
+// Requirements on the machine: Node 18+, Python 3.10+ with
+// requirements-all.txt installed (the engines are Python). Set the PYTHON
+// env var if your python isn't on PATH.
 // ---------------------------------------------------------------------------
 
 const crypto = require("crypto");
 const fs = require("fs");
+const http = require("http");
 const os = require("os");
 const path = require("path");
+const { spawn } = require("child_process");
 const express = require("express");
-const XLSX = require("xlsx");
 
-const { ACCOUNTS, COMPANIES } = require("./companies");
-const { load } = require("./loader");
-const { applyFilters, summary, filterOptions, page } = require("./analytics");
-
+const ROOT = path.join(__dirname, "..");
+const DATA = path.join(ROOT, "data");
 const PORT = parseInt(process.env.PORT || "8000", 10);
-const CLIENT_DIST = path.join(__dirname, "..", "client", "dist");
+const PYTHON = process.env.PYTHON || (process.platform === "win32" ? "python" : "python3");
+
+// ------------------------------------------------------------ configuration
+
+const ACCOUNTS = {
+  m3m:        { password: "M3M@123", company: "m3m" },
+  smartworld: { password: "SW@123",  company: "smartworld" },
+  nbh:        { password: "NBH@123", company: "nbh" },
+};
+
+const COMPANIES = {
+  m3m: {
+    title: "M3M Customer Complaint MIS",
+    port: 9101,
+    dataDir: "m3m",
+    cwd: path.join(ROOT, "apps", "m3m-mis", "backend"),
+    args: ["-c",
+      "import sys, uvicorn; sys.path.insert(0, '.'); import api_app; " +
+      "api_app.mount_frontend('../frontend'); " +
+      "uvicorn.run(api_app.app, host='127.0.0.1', port=9101, log_level='warning')"],
+  },
+  smartworld: {
+    title: "Smartworld Customer Complaint MIS",
+    port: 9102,
+    dataDir: "smartworld",
+    cwd: path.join(ROOT, "apps", "sw-mis", "backend"),
+    args: ["-c",
+      "import sys, uvicorn; sys.path.insert(0, '.'); import api_app; " +
+      "api_app.mount_frontend('../frontend'); " +
+      "uvicorn.run(api_app.app, host='127.0.0.1', port=9102, log_level='warning')"],
+  },
+  nbh: {
+    title: "NBH Complaint Management Dashboard",
+    port: 9103,
+    dataDir: "nbh",
+    cwd: path.join(ROOT, "apps", "nbh-mis", "backend"),
+    args: ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1",
+      "--port", "9103", "--log-level", "warning"],
+  },
+};
+
 const SESSION_TTL = 12 * 3600 * 1000;
 const COOKIE = "mis_session";
 
-// Signing secret persisted so sessions survive restarts.
-const secretFile = path.join(__dirname, "..", ".session_secret");
+// ---------------------------------------------------------- session cookies
+
+const secretFile = path.join(ROOT, ".session_secret");
 const SECRET = fs.existsSync(secretFile)
   ? fs.readFileSync(secretFile)
-  : (() => {
-      const s = crypto.randomBytes(32);
-      fs.writeFileSync(secretFile, s);
-      return s;
-    })();
-
-// --- session cookie helpers -----------------------------------------------
-
-const b64e = (b) => Buffer.from(b).toString("base64url");
-const b64d = (s) => Buffer.from(s, "base64url").toString();
+  : (() => { const s = crypto.randomBytes(32); fs.writeFileSync(secretFile, s); return s; })();
 
 function makeSession(username, company) {
-  const payload = b64e(JSON.stringify({ u: username, c: company, t: Date.now() }));
+  const payload = Buffer.from(JSON.stringify({ u: username, c: company, t: Date.now() })).toString("base64url");
   const sig = crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
 function readSession(req) {
-  const raw = (req.headers.cookie || "")
-    .split(";")
-    .map((s) => s.trim())
+  const raw = (req.headers.cookie || "").split(";").map((s) => s.trim())
     .find((s) => s.startsWith(COOKIE + "="));
   if (!raw) return null;
   const token = raw.slice(COOKIE.length + 1);
   const dot = token.lastIndexOf(".");
   if (dot < 0) return null;
   const payload = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
   const good = crypto.createHmac("sha256", SECRET).update(payload).digest("base64url");
-  if (sig.length !== good.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good)))
-    return null;
+  const sig = token.slice(dot + 1);
+  if (sig.length !== good.length ||
+      !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(good))) return null;
   try {
-    const data = JSON.parse(b64d(payload));
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString());
     if (!COMPANIES[data.c] || Date.now() - data.t > SESSION_TTL) return null;
     return data;
-  } catch {
-    return null;
+  } catch { return null; }
+}
+
+// ------------------------------------------------------- engine supervision
+
+function startEngines() {
+  for (const [id, c] of Object.entries(COMPANIES)) {
+    const child = spawn(PYTHON, c.args, { cwd: c.cwd, stdio: ["ignore", "inherit", "inherit"] });
+    child.on("exit", (code) => {
+      console.error(`[engine ${id}] exited with code ${code}. ` +
+        `Usual cause: Python deps missing -> pip install -r requirements-all.txt ` +
+        `(python used: ${PYTHON}; override with the PYTHON env var).`);
+    });
+    c.proc = child;
   }
 }
 
-// --- app -------------------------------------------------------------------
-
-const app = express();
-app.use(express.json());
-
-function requireAuth(req, res, next) {
-  const s = readSession(req);
-  if (!s) return res.status(401).json({ error: "Not signed in." });
-  req.session = s;
-  next();
+function stopEngines() {
+  for (const c of Object.values(COMPANIES)) {
+    if (c.proc && c.proc.exitCode === null) c.proc.kill();
+  }
 }
 
-app.post("/api/login", (req, res) => {
+// ------------------------------------------------ Excel folder auto-ingest
+
+function newestExcel(dir) {
+  if (!fs.existsSync(dir)) return null;
+  const files = fs.readdirSync(dir)
+    .filter((f) => /\.(xlsx|xls)$/i.test(f) && !f.startsWith("~$"))
+    .map((f) => ({ full: path.join(dir, f), name: f, mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+  return files[0] || null;
+}
+
+async function ingest(id, file, attempt = 1) {
+  const c = COMPANIES[id];
+  // Mark as claimed immediately so the poller doesn't start a second
+  // upload of the same file while this one is in flight / retrying.
+  c.ingested = { path: file.full, mtime: file.mtime, pending: true };
+  try {
+    const buf = fs.readFileSync(file.full);
+    const form = new FormData();
+    form.append("file", new Blob([buf]), file.name);
+    const res = await fetch(`http://127.0.0.1:${c.port}/api/upload`, { method: "POST", body: form });
+    if (res.ok) {
+      c.ingested = { path: file.full, mtime: file.mtime };
+      console.log(`[data ${id}] loaded ${file.name} into ${c.title}`);
+    } else {
+      const detail = await res.text().catch(() => "");
+      console.error(`[data ${id}] engine rejected ${file.name} (${res.status}): ${detail.slice(0, 300)}`);
+      c.ingested = { path: file.full, mtime: file.mtime, failed: true }; // don't retry same file forever
+    }
+  } catch (e) {
+    // Engine probably not up yet - retry with backoff for ~60s.
+    if (attempt < 15) setTimeout(() => ingest(id, file, attempt + 1), 4000);
+    else console.error(`[data ${id}] could not reach engine to load ${file.name}: ${e.message}`);
+  }
+}
+
+function watchDataFolders() {
+  const check = () => {
+    for (const [id, c] of Object.entries(COMPANIES)) {
+      const file = newestExcel(path.join(DATA, c.dataDir));
+      if (!file) continue;
+      const cur = c.ingested;
+      if (!cur || cur.path !== file.full || cur.mtime !== file.mtime) ingest(id, file);
+    }
+  };
+  setTimeout(check, 3000); // initial load once engines are (probably) up
+  setInterval(check, 5000);
+}
+
+// ------------------------------------------------------------------ gateway
+
+const app = express();
+
+const LOGOUT_CHIP = (user) =>
+  `<div style="position:fixed;right:14px;bottom:14px;z-index:2147483647;` +
+  `font:12px/1 Segoe UI,Arial,sans-serif;background:#0F1F3D;color:#fff;` +
+  `border:1px solid #2C4A7C;border-radius:6px;padding:7px 10px;opacity:.92">` +
+  `${user} &nbsp;·&nbsp; <a href="/__gate/logout" style="color:#fff">Sign out</a></div>`;
+
+app.post("/__gate/login", express.json(), (req, res) => {
   const username = String(req.body?.username || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const acct = ACCOUNTS[username];
-  const ok =
-    acct &&
-    acct.password.length === password.length &&
+  const ok = acct && acct.password.length === password.length &&
     crypto.timingSafeEqual(Buffer.from(acct.password), Buffer.from(password));
   if (!ok) return res.status(401).json({ error: "Incorrect username or password." });
-
-  res.setHeader(
-    "Set-Cookie",
-    `${COOKIE}=${makeSession(username, acct.company)}; Max-Age=${SESSION_TTL / 1000}; Path=/; HttpOnly; SameSite=Lax`
-  );
-  const c = COMPANIES[acct.company];
-  res.json({ ok: true, company: acct.company, title: c.title, accent: c.accent });
+  res.setHeader("Set-Cookie",
+    `${COOKIE}=${makeSession(username, acct.company)}; Max-Age=${SESSION_TTL / 1000}; Path=/; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true, title: COMPANIES[acct.company].title });
 });
 
-app.post("/api/logout", (_req, res) => {
+app.get("/__gate/logout", (_req, res) => {
   res.setHeader("Set-Cookie", `${COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`);
-  res.json({ ok: true });
+  res.redirect("/");
 });
 
-app.get("/api/me", (req, res) => {
-  const s = readSession(req);
-  if (!s) return res.json({ signedIn: false });
-  const c = COMPANIES[s.c];
-  res.json({
-    signedIn: true,
-    username: s.u,
-    company: s.c,
-    title: c.title,
-    short: c.short,
-    accent: c.accent,
+// Everything else: login page if signed out, transparent proxy if signed in.
+app.use((req, res) => {
+  const session = readSession(req);
+
+  if (!session) {
+    if (req.method === "GET" || req.method === "HEAD") {
+      return res.sendFile(path.join(__dirname, "login.html"));
+    }
+    return res.status(401).json({ error: "Not signed in." });
+  }
+
+  const target = COMPANIES[session.c];
+  const headers = { ...req.headers };
+  delete headers.host;
+  delete headers["accept-encoding"]; // keep upstream responses uncompressed so we can inject the chip
+
+  const upstream = http.request(
+    { host: "127.0.0.1", port: target.port, path: req.originalUrl, method: req.method, headers },
+    (ur) => {
+      const ctype = ur.headers["content-type"] || "";
+      const outHeaders = { ...ur.headers };
+      if (ctype.includes("text/html")) {
+        const chunks = [];
+        ur.on("data", (d) => chunks.push(d));
+        ur.on("end", () => {
+          let html = Buffer.concat(chunks).toString("utf8");
+          const i = html.toLowerCase().lastIndexOf("</body>");
+          const chip = LOGOUT_CHIP(session.u);
+          html = i !== -1 ? html.slice(0, i) + chip + html.slice(i) : html + chip;
+          delete outHeaders["content-length"];
+          res.writeHead(ur.statusCode, outHeaders);
+          res.end(html);
+        });
+      } else {
+        res.writeHead(ur.statusCode, outHeaders);
+        ur.pipe(res);
+      }
+    }
+  );
+
+  upstream.on("error", () => {
+    res.status(502).type("text/plain").send(
+      `${target.title} engine is not running yet - give it a few seconds and refresh.\n` +
+      `If this persists, install the Python dependencies:  pip install -r requirements-all.txt`
+    );
   });
+
+  req.pipe(upstream);
 });
 
-app.get("/api/data", requireAuth, (req, res) => {
-  const store = load(req.session.c);
-  const filtered = applyFilters(store.records, req.query);
-  res.json({
-    meta: {
-      source: store.source,
-      loadedAt: store.loadedAt,
-      warnings: store.warnings,
-      totalRecords: store.records.length,
-    },
-    filters: filterOptions(store.records),
-    summary: summary(filtered),
-    table: page(filtered, parseInt(req.query.page || "1", 10), parseInt(req.query.pageSize || "25", 10)),
-  });
-});
-
-app.post("/api/reload", requireAuth, (req, res) => {
-  const store = load(req.session.c, true);
-  res.json({ ok: true, source: store.source, records: store.records.length, warnings: store.warnings });
-});
-
-app.get("/api/export", requireAuth, (req, res) => {
-  const store = load(req.session.c);
-  const filtered = applyFilters(store.records, req.query);
-  const rows = filtered.map((r) => ({
-    "Case/Ticket": r.id, Customer: r.customer, Subject: r.subject,
-    Project: r.project, Unit: r.unit, Category: r.category,
-    "Sub Category": r.subCategory, Priority: r.priority, Owner: r.owner,
-    Source: r.source, Status: r.status, "Open/Closed": r.statusClass,
-    "Opened Date": r.opened, "Closed Date": r.closed,
-    "TAT Days": r.tatDays, "Ageing Bucket": r.ageBucket,
-  }));
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Complaints");
-  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-  const name = `${COMPANIES[req.session.c].short}_MIS_Export_${new Date().toISOString().slice(0, 10)}.xlsx`;
-  res.setHeader("Content-Disposition", `attachment; filename="${name}"`);
-  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  res.send(buf);
-});
-
-// --- static client ---------------------------------------------------------
-
-app.use(express.static(CLIENT_DIST));
-app.get("*", (_req, res) => res.sendFile(path.join(CLIENT_DIST, "index.html")));
-
-// --- start -----------------------------------------------------------------
+// -------------------------------------------------------------------- start
 
 function lanIp() {
-  for (const ifaces of Object.values(os.networkInterfaces())) {
-    for (const i of ifaces || []) {
+  for (const ifaces of Object.values(os.networkInterfaces()))
+    for (const i of ifaces || [])
       if (i.family === "IPv4" && !i.internal) return i.address;
-    }
-  }
   return "localhost";
 }
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log("\nMIS Company is running.\n");
+startEngines();
+watchDataFolders();
+
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log("\nMIS Company gateway is running.\n");
   console.log(`  Share this link:   http://${lanIp()}:${PORT}`);
   console.log(`  On this machine:   http://localhost:${PORT}\n`);
   console.log("  Logins:  m3m / M3M@123   smartworld / SW@123   nbh / NBH@123");
-  console.log("  Excel folders:  data/m3m/  data/smartworld/  data/nbh/");
-  console.log("  Replace an Excel and refresh the browser - data reloads automatically.\n");
+  console.log("  Excel folders (auto-loaded, newest file wins):");
+  console.log("      data/m3m/    data/smartworld/    data/nbh/\n");
 });
+
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => {
+    console.log("\nStopping gateway and engines...");
+    stopEngines();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000);
+  });
+}
