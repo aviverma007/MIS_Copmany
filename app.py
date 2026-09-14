@@ -300,37 +300,63 @@ justify-content:center;color:#fff;font-weight:800;font-size:13px;flex:0 0 auto}}
 #  - NBH: hides the "Upload" nav tab (NavLink to "/").
 INJECT = """
 <style>
+  /* --- MIS Company gateway bar --- */
+  #mis-gate-bar {
+    position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 2147483647;
+    display: flex; align-items: center; gap: 10px; padding: 0 14px;
+    background: linear-gradient(135deg, #0F1F3D, #1F3864); color: #fff;
+    font: 13px/1 'Segoe UI', Arial, sans-serif; box-shadow: 0 2px 8px rgba(15,31,61,.25);
+  }
+  #mis-gate-bar .gb-brand { font-weight: 800; letter-spacing: .2px; }
+  #mis-gate-bar .gb-user { opacity: .7; font-size: 12px; }
+  #mis-gate-bar .gb-spacer { flex: 1; }
+  #mis-gate-bar a {
+    color: #fff; text-decoration: none; font-weight: 600; font-size: 12.5px;
+    border: 1px solid rgba(255,255,255,.4); border-radius: 6px; padding: 6px 14px;
+  }
+  #mis-gate-bar a:hover { background: rgba(255,255,255,.15); }
+  /* push the app down and re-anchor its sticky bars */
+  body { margin-top: 40px !important; }
+  .app-header { top: 40px !important; }
+  .active-filters-bar { top: 102px !important; }
+  /* hide original upload UI + viewer/admin toggle */
   nav a[href="/"] { display: none !important; }
   .role-badge { display: none !important; }
 </style>
-<div style="position:fixed;right:14px;bottom:14px;z-index:2147483647;
-  font:12px/1 'Segoe UI',Arial,sans-serif;background:#0F1F3D;color:#fff;
-  border:1px solid #2C4A7C;border-radius:6px;padding:7px 10px;opacity:.93">
-  __USER__ &nbsp;·&nbsp; <a href="/__gate/home" style="color:#fff">Home</a>
-  &nbsp;·&nbsp; <a href="/__gate/logout" style="color:#fff">Sign out</a>
+<div id="mis-gate-bar">
+  <span class="gb-brand">MIS Company</span>
+  <span class="gb-user">__USER__</span>
+  <span class="gb-spacer"></span>
+  <a href="/__gate/home">Home</a>
+  <a href="/__gate/logout">Sign out</a>
 </div>
 <script>
 (function () {
-  function sweep(root) {
-    (root.querySelectorAll ? root.querySelectorAll("button") : []).forEach(function (b) {
+  function sweep() {
+    document.querySelectorAll("button").forEach(function (b) {
       if (/upload new file/i.test(b.textContent || "")) b.remove();
     });
-    var up = root.querySelector && root.querySelector(".upload-screen .upload-card");
-    if (up) up.innerHTML =
-      "<h1 style='margin:0 0 8px'>Data loads automatically</h1>" +
-      "<p style='color:#4A5568'>This application reads its Excel from the server's " +
-      "data folder. Ask the administrator to place the file there — " +
-      "no manual upload is needed.</p>";
+    var up = document.querySelector(".upload-screen .upload-card");
+    if (up && !up.dataset.misPatched) {
+      up.dataset.misPatched = "1";
+      up.innerHTML =
+        "<h1 style='margin:0 0 8px'>Data loads automatically</h1>" +
+        "<p style='color:#4A5568'>This application reads its Excel from the server's " +
+        "data folder. Ask the administrator to place the file there.</p>";
+    }
   }
-  var run = function () { sweep(document); };
+  var pending = null;
+  function schedule() {           // debounced: at most one sweep per 400ms
+    if (pending) return;
+    pending = setTimeout(function () { pending = null; sweep(); }, 400);
+  }
   if (document.readyState === "loading")
-    document.addEventListener("DOMContentLoaded", run);
-  else run();
-  new MutationObserver(run).observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener("DOMContentLoaded", sweep);
+  else sweep();
+  new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
 })();
 </script>
 """
-
 # ------------------------------------------------------------------ gateway
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
