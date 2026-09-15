@@ -434,6 +434,25 @@ async def login(request: Request):
     return resp
 
 
+@app.get("/__gate/status")
+async def gate_status(request: Request):
+    if not read_session(request.cookies.get(COOKIE)):
+        return JSONResponse({"error": "Not signed in."}, status_code=401)
+    out = {}
+    for aid, a in APPS.items():
+        p = _engine_procs.get(aid)
+        st = _ingest_state.get(aid) or {}
+        f = _newest_excel(DATA / a["data_dir"])
+        out[aid] = {
+            "engine_running": bool(p and p.poll() is None),
+            "data_loaded": bool(st.get("ok")),
+            "error": st.get("error"),
+            "newest_excel": f.name if f else None,
+            "excel_size_mb": round(f.stat().st_size / 1048576, 1) if f else None,
+        }
+    return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/__gate/logout")
 async def logout():
     # Serve the login page directly - no redirect hop, instant.
@@ -579,15 +598,20 @@ def data_ready(aid: str):
 def _ingest(aid: str, file: Path):
     a = APPS[aid]
     key = (str(file), file.stat().st_mtime)
+    size_mb = file.stat().st_size / 1048576
+    print(f"  [data {aid}] uploading {file.name} ({size_mb:.1f} MB) - "
+          f"large files can take a few minutes...")
+    t_start = time.time()
     try:
         with open(file, "rb") as fh:
             r = httpx.post(f"http://127.0.0.1:{a['port']}/api/upload",
                            files={"file": (file.name, fh,
                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-                           timeout=180)
+                           timeout=600)
         if r.status_code == 200:
             _ingest_state[aid] = {"key": key, "ok": True, "error": None}
-            print(f"  [data {aid}] loaded {file.name} into {a['title']}")
+            print(f"  [data {aid}] loaded {file.name} into {a['title']} "
+                  f"in {time.time() - t_start:.0f}s")
         else:
             detail = r.text[:400]
             _ingest_state[aid] = {"key": key, "ok": False,
