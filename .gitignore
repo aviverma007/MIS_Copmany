@@ -13,3 +13,4 @@ data/**/*.xlsx
 !data/m3m/M3M_Test_Data.xlsx
 !data/smartworld/SW_Test_Data.xlsx
 !data/nbh/NBH_Test_Data.xlsx
+!data/nbh/NBH_Raw_Data.xlsx
