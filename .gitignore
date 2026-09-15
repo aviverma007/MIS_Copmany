@@ -6,3 +6,10 @@ venv/
 *.log
 .DS_Store
 ~$*
+
+# Real company data stays OUT of git (repo is public!) - only the synthetic
+# test excels are tracked. Place real files in the data folders directly.
+data/**/*.xlsx
+!data/m3m/M3M_Test_Data.xlsx
+!data/smartworld/SW_Test_Data.xlsx
+!data/nbh/NBH_Test_Data.xlsx

@@ -39,8 +39,12 @@ Single account (default): **`admin` / `admin`** — change it in `app.py`
   (column detection, day-first SFDC dates, business-rule formulas).
 - If an engine rejects a file (wrong sheet/columns), the reason prints in
   the `python app.py` console.
-- Current files are **generated sample data** — regenerate with
-  `python scripts/make_sample_data.py`, replace with real exports anytime.
+- Current tracked files are **generated sample data** — regenerate with
+  `python scripts/make_sample_data.py`.
+- **Real company excels are git-ignored on purpose** (this repo is public).
+  Place them in the data folders directly on the server machine; the newest
+  file in each folder always wins, so a real export automatically outranks
+  the older test file sitting next to it.
 
 ## How it works
 
