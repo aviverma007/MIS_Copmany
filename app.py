@@ -533,9 +533,26 @@ async def route_all(request: Request, path: str):
     out_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in HOP}
     ctype = upstream.headers.get("content-type", "")
 
+    # The NBH frontend build has "http://localhost:8000" baked in as its API
+    # base, which breaks when the page is opened via the LAN IP or any other
+    # host (cross-origin: the session cookie isn't sent). Rewrite it to a
+    # relative base in any JS the proxy serves, so API calls always target
+    # the address the user actually opened. App files stay untouched.
+    if ("javascript" in ctype or "ecmascript" in ctype) and \
+            b"http://localhost:8000" in upstream.content:
+        patched = upstream.content.replace(b"http://localhost:8000", b"")
+        out_headers["cache-control"] = "no-store"
+        out_headers.pop("etag", None)
+        out_headers.pop("last-modified", None)
+        resp = Response(patched, status_code=upstream.status_code,
+                        headers=out_headers, media_type=ctype)
+        set_session_cookie(resp, session["u"], session["a"], session.get("t0"))
+        return resp
+
     if "text/html" in ctype:
         html = upstream.text
         inject = INJECT.replace("__USER__", session["u"])
+        html = html.replace("http://localhost:8000", "")
         i = html.lower().rfind("</body>")
         html = (html[:i] + inject + html[i:]) if i != -1 else html + inject
         out_headers["cache-control"] = "no-store"
