@@ -345,6 +345,9 @@ a{{color:var(--teal-600)}}
 #    landing screen ever shows (empty data folder), replaces it with a note.
 #  - NBH: hides the "Upload" nav tab (NavLink to "/").
 INJECT = """
+<!-- IT Manager usage tracking: visits, pages, minutes (fails silently if IT Manager is offline) -->
+<script>window.ITM_USER = "__USER__";</script>
+<script async src="http://192.168.66.28:4000/track.js" data-app="MIS_COMPANY"></script>
 <style>
   /* --- MIS Company gateway bar --- */
   #mis-gate-bar {
